@@ -13,9 +13,17 @@
  * SPDX-License-Identifier: EPL-2.0 OR W3C-20150513
  ********************************************************************************/
 
-export { default as PropertyResourceListener } from "./property-resource-listener";
-export { default as ActionResourceListener } from "./action-resource-listener";
-export { default as EventResourceListener } from "./event-resource-listener";
-export { default as TDResourceListener } from "./td-resource-listener"
-export { default as AssetResourceListener } from "./asset-resource-listener";
-export { default as BasicResourceListener } from "./basic-resource-listener";
+WoT.fetch("file://./cf-secure.jsonld").then( async (td) => {
+
+	let cf = WoT.consume(td);
+	console.info("=== TD ===");
+	console.info(td);
+	console.info("==========");
+
+	cf.properties.const.read().then( (res) => {
+		console.info("Received:", res);
+	}).catch( (err) => {
+		console.error("Get root error:", err.message);
+	});
+
+}).catch( (err) => { console.error("Fetch error:", err.message); });

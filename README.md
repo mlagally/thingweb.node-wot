@@ -14,8 +14,7 @@ Please also see the additional [notices](NOTICE.md) and [how to contribute](CONT
 
 ## Prerequisites
 All systems require:
-* [NodeJS](https://nodejs.org/) version 8+ (e.g., 8.11.3 LTS)
-* NodeJS version 10+ will not require certain polyfills, but is not LTS (long-term stable)
+* [NodeJS](https://nodejs.org/) version 10+ (e.g., 10.13.0 LTS)
 
 ### Linux
 Meet the [node-gyp](https://github.com/nodejs/node-gyp#installation) requirements:
@@ -67,8 +66,8 @@ sudo npm run link
 To evolve the Scripting API in development, you need to use a locally changed version of the [wot-typescript-definitions](https://www.npmjs.com/package/wot-typescript-definitions).
 Use npm link for this as well:
 ```
-git clone https://github.com/thingweb/wot-typescript-definitions.git
-cd wot-typescript-definitions
+git clone https://github.com/w3c/wot-scripting-api/
+cd wot-scripting-api/typescript/
 sudo npm link
 ```
 (On Windows omit `sudo`)
@@ -84,8 +83,10 @@ sudo npm link wot-typescript-definitions
 * Build error around `node-aead-crypto`
    * node-gyp has been seen failing on MacOS
    * try node 10+, which does not require the crypto polyfill
+* Build error about `No matching version found for @node-wot/...` or something about `match`
+   * try `npm run unlock` from project root before building
 * `sudo npm run link` does not work
-   * try `npm run unlock` before calling `[sudo] npm run link`
+   * try `npm run unlock` from project root before calling `[sudo] npm run link`
    * try `npm link` in each package directory in this order: td-tools, core, binding-\*, cli, demo-servients
 
 ## No time for explanations - I want to start from something running!
@@ -115,7 +116,7 @@ node packages\cli\dist\cli.js examples\scripts\counter-client.js
 This library implements the WoT Scripting API:
 
 * [Editors Draft](w3c.github.io/wot-scripting-api/) in [master](https://github.com/eclipse/thingweb.node-wot)
-* [Working Draft](https://www.w3.org/TR/wot-scripting-api/) corresponding to node-wot release versions ([v0.3.0](https://github.com/thingweb/node-wot/releases/tag/v0.3.0) for FPWD, [v0.4.0](https://github.com/thingweb/node-wot/releases/tag/v0.4.0) for WD-2018-04-05, [v0.5.0](https://github.com/eclipse/thingweb.node-wot/releases/tag/v0.5.0) t.b.d.)
+* [Working Draft](https://www.w3.org/TR/wot-scripting-api/) corresponding to node-wot release versions ([v0.3.0](https://github.com/thingweb/node-wot/releases/tag/v0.3.0) for FPWD, [v0.4.0](https://github.com/thingweb/node-wot/releases/tag/v0.4.0) for WD-2018-04-05, [v0.5.0](https://github.com/eclipse/thingweb.node-wot/releases/tag/v0.5.0) for WD-2018-10-??)
 
 You can also see `examples/scripts` to have a feeling of how to script a Thing.
 

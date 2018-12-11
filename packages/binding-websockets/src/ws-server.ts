@@ -18,138 +18,111 @@
  */
 
 import * as http from "http";
+import * as https from "https";
 import * as url from "url";
+import * as fs from "fs";
 
 import * as WebSocket from "ws";
-
-import { ProtocolServer, ResourceListener, ContentSerdes, ExposedThing } from "@node-wot/core";
-import { EventResourceListener } from "@node-wot/core";
-import { HttpServer } from "@node-wot/binding-http";
 import { AddressInfo } from "net";
+
+import * as TD from "@node-wot/td-tools";
+import { ProtocolServer, Servient, ExposedThing, ContentSerdes, Helpers, Content } from "@node-wot/core";
+import { HttpServer, HttpConfig } from "@node-wot/binding-http";
 
 export default class WebSocketServer implements ProtocolServer {
 
-  public readonly scheme: string = "ws";
+  public readonly scheme: string;
+  public readonly EVENT_DIR: string = "events";
   private readonly port: number = 8081;
+  private readonly address: string = undefined;
   private readonly ownServer: boolean = true;
-  private readonly httpServer: http.Server;
-  private readonly server: WebSocketServer;
-  private running: boolean = false;
-  private failed: boolean = false;
+  private readonly httpServer: http.Server | https.Server;
 
   private readonly thingNames: Set<string> = new Set<string>();
-  private readonly resources: { [key: string]: ResourceListener } = {};
   private readonly socketServers: { [key: string]: WebSocket.Server } = {};
 
-  constructor(portOrServer?: number | HttpServer) {
-    if (typeof portOrServer==="number") {
-      this.port = portOrServer;
-      this.httpServer = http.createServer();
-    } else if (typeof portOrServer==="object") {
+  constructor(serverOrConfig: HttpServer | HttpConfig = {} ) {
+    // FIXME instanceof did not work reliably
+    if (serverOrConfig instanceof HttpServer && (typeof serverOrConfig.getServer === "function")) {
       this.ownServer = false;
-      this.httpServer = portOrServer.getServer();
-      this.port = portOrServer.getPort();
-    } else {
-      throw new Error(`WebSocketServer constructor argument must be number, http.Server, or undefined`);
-    }
-  }
+      this.httpServer = serverOrConfig.getServer();
+      this.port = serverOrConfig.getPort();
+      this.scheme = serverOrConfig.scheme === "https" ? "wss" : "ws";
 
-  public expose(thing: ExposedThing): Promise<void> {
-
-    let name = thing.name;
-
-    if (this.thingNames.has(name)) {
-      let suffix = name.match(/.+_([0-9]+)$/);
-      if (suffix !== null) {
-        name = name.slice(0, -suffix[1].length) + (1+parseInt(suffix[1]));
+    } else if (typeof serverOrConfig === "object") {
+      let config: HttpConfig = <HttpConfig>serverOrConfig;
+      // HttpConfig
+      if (config.port !== undefined) {
+        this.port = config.port;
+      }
+      if (config.address !== undefined) {
+        this.address = config.address;
+      }
+  
+      // TLS
+      if (config.serverKey && config.serverCert) {
+        let options: any = {};
+        options.key = fs.readFileSync(config.serverKey);
+        options.cert = fs.readFileSync(config.serverCert);
+        this.scheme = "wss";
+        this.httpServer = https.createServer(options);
       } else {
-        name = name + "_2";
+        this.scheme = "ws";
+        this.httpServer = http.createServer();
       }
+    } else {
+      throw new Error(`WebSocketServer constructor argument must be HttpServer, HttpConfig, or undefined`);
     }
-
-    console.log(`WebSocketServer on port ${this.getPort()} exposes '${thing.name}' as unique '/${name}/*'`);
-    return new Promise<void>((resolve, reject) => {
-
-      // TODO clean-up on destroy
-      this.thingNames.add(name);
-      
-      // TODO more efficient routing to ExposedThing without ResourceListeners in each server
-      for (let eventName in thing.events) {
-        let path = "/" + encodeURIComponent(name) + "/events/" + encodeURIComponent(eventName);
-        let listener = new EventResourceListener(eventName, thing.events[eventName].getState().subject);
-        
-        console.debug(`WebSocketServer on port ${this.getPort()} adding resource '${path}'`);
-        this.socketServers[path] = new WebSocket.Server({ noServer: true });
-        this.socketServers[path].on('connection', (ws) => {
-          let subscription = listener.subscribe({
-            next: (content) => {
-              switch (content.contentType) {
-                case "application/json":
-                case "text/plain":
-                  ws.send(content.body.toString());
-                  break;
-                default:
-                  ws.send(content.body);
-                  break;
-              }
-            },
-            complete: () => ws.close()
-          });
-          ws.on("close", () => { subscription.unsubscribe(); });
-        });
-      }
-
-      resolve();
-    });
-
   }
 
-  public start(): Promise<void> {
-    console.info(`WebSocketServer starting on port ${this.port}`);
+  public start(servient: Servient): Promise<void> {
+    console.info(`WebSocketServer starting on ${(this.address !== undefined ? this.address + ' ' : '')}port ${this.port}`);
     return new Promise<void>((resolve, reject) => {
 
-      if (this.ownServer) {
-        this.httpServer.once('error', (err: Error) => { reject(err); });
-        this.httpServer.once('listening', () => {
-          // once started, console "handles" errors
-          this.httpServer.on('error', (err: Error) => {
-            console.error(`WebSocketServer on port ${this.port} failed: ${err.message}`);
-            resolve();
-          });
-        });
-        this.httpServer.listen(this.port);
-      }
-
-      this.httpServer.on('upgrade', (request, socket, head) => {
+      // handle incoming WebScoket connections
+      this.httpServer.on("upgrade", (request, socket, head) => {
         const pathname = url.parse(request.url).pathname;
 
         let socketServer = this.socketServers[pathname];
 
         if (socketServer) {
           socketServer.handleUpgrade(request, socket, head, (ws) => {
-            socketServer.emit('connection', ws, request);
+            socketServer.emit("connection", ws, request);
           });
         } else {
           socket.destroy();
         }
       });
-      if (!this.ownServer) resolve();
+
+      if (this.ownServer) {
+        this.httpServer.once("error", (err: Error) => { reject(err); });
+        this.httpServer.once("listening", () => {
+          // once started, console "handles" errors
+          this.httpServer.on("error", (err: Error) => {
+            console.error(`WebSocketServer on port ${this.port} failed: ${err.message}`);
+          });
+          resolve();
+        });
+        this.httpServer.listen(this.port, this.address);
+      } else {
+        resolve();
+      }
     });
   }
 
   public stop(): Promise<void> {
     console.info(`WebSocketServer stopping on port ${this.port}`);
     return new Promise<void>((resolve, reject) => {
+      for (let path in this.socketServers) {
+        this.socketServers[path].close();
+      }
 
       // stop promise handles all errors from now on
       if (this.ownServer) {
+        console.log(`WebSocketServer stopping own HTTP server`);
         this.httpServer.once('error', (err: Error) => { reject(err); });
         this.httpServer.once('close', () => { resolve(); });
         this.httpServer.close();
-      } else {
-        for (let path in this.socketServers) {
-          this.socketServers[path].close();
-        }
       }
     });
   }
@@ -163,144 +136,70 @@ export default class WebSocketServer implements ProtocolServer {
     }
   }
 
+  public expose(thing: ExposedThing): Promise<void> {
 
-  private handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    let name = thing.name;
 
-    res.on('finish', () => {
-      console.log(`HttpServer on port ${this.getPort()} replied with ${res.statusCode} to ${req.socket.remoteAddress} port ${req.socket.remotePort}`);
-    });
-
-    // Set CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Request-Method', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, HEAD, GET, POST, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, *');
-    if (req.method === 'OPTIONS') {
-      res.writeHead(200);
-      res.end();
-      return;
+    if (this.thingNames.has(name)) {
+      name = Helpers.generateUniqueName(name);
     }
 
-    let requestUri = url.parse(req.url);
-    let requestHandler = this.resources[requestUri.pathname];
-    let contentTypeHeader: string | string[] = req.headers["content-type"];
-    let contentType: string = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : contentTypeHeader;
+    if (this.getPort() !== -1) {
 
-    console.log(`HttpServer on port ${this.getPort()} received ${req.method} ${requestUri.pathname} from ${req.socket.remoteAddress} port ${req.socket.remotePort}`);
+      console.log(`WebSocketServer on port ${this.getPort()} exposes '${thing.name}' as unique '/${name}/*'`);
+
+      // TODO clean-up on destroy
+      this.thingNames.add(name);
     
-    // FIXME must be rejected with 415 Unsupported Media Type, guessing not allowed -> debug/testing flag
-    if ((req.method === "PUT" || req.method === "POST") && (!contentType || contentType.length == 0)) {
-      console.warn(`HttpServer on port ${this.getPort()} got no Media Type for ${req.method}`);
-      contentType = ContentSerdes.DEFAULT;
-    }
-
-    if (requestHandler === undefined) {
-      res.writeHead(404);
-      res.end("Not Found");
-
-    } else if ( (req.method === "PUT" || req.method === "POST")
-              && ContentSerdes.get().getSupportedMediaTypes().indexOf(ContentSerdes.getMediaType(contentType))<0) {
-      res.writeHead(415);
-      res.end("Unsupported Media Type");
-
-    } else {
-      if (req.method === "GET" && (requestHandler.getType()==="Property" || requestHandler.getType()==="Asset" ||(requestHandler.getType()==="TD"))) {
-        requestHandler.onRead()
-          .then(content => {
-            if (!content.contentType) {
-              console.warn(`HttpServer on port ${this.getPort()} got no Media Type from ${req.socket.remoteAddress} port ${req.socket.remotePort}`);
-            } else {
-              res.setHeader("Content-Type", content.contentType);
-            }
-            res.writeHead(200);
-            res.end(content.body);
-          })
-          .catch(err => {
-            console.error(`HttpServer on port ${this.getPort()} got internal error on read '${requestUri.pathname}': ${err.message}`);
-            res.writeHead(500);
-            res.end(err.message);
-          });
-
-      } else if (req.method === "PUT" && requestHandler.getType()==="Property" || requestHandler.getType()==="Asset") {
-        let body: Array<any> = [];
-        req.on("data", (data) => { body.push(data) });
-        req.on("end", () => {
-          console.debug(`HttpServer on port ${this.getPort()} completed body '${body}'`);
-          requestHandler.onWrite({ contentType: contentType, body: Buffer.concat(body) })
-            .then(() => {
-              res.writeHead(204);
-              res.end("Changed");
-            })
-            .catch(err => {
-              console.error(`HttpServer on port ${this.getPort()} got internal error on write '${requestUri.pathname}': ${err.message}`);
-              res.writeHead(500);
-              res.end(err.message);
-            });
-        });
-
-      } else if (req.method === "POST" && requestHandler.getType()==="Action") {
-        let body: Array<any> = [];
-        req.on("data", (data) => { body.push(data) });
-        req.on("end", () => {
-          console.debug(`HttpServer on port ${this.getPort()} completed body '${body}'`);
-          requestHandler.onInvoke({ contentType: contentType, body: Buffer.concat(body) })
-            .then(content => {
-              // Actions may have a void return (no output)
-              if (content.body === null) {
-                res.writeHead(204);
-                res.end("Changed");
-              } else {
-                if (!content.contentType) {
-                  console.warn(`HttpServer on port ${this.getPort()} got no Media Type from '${requestUri.pathname}'`);
-                } else {
-                  res.setHeader('Content-Type', content.contentType);
-                }
-                res.writeHead(200);
-                res.end(content.body);
+      // TODO more efficient routing to ExposedThing without ResourceListeners in each server
+      for (let eventName in thing.events) {
+        let path = "/" + encodeURIComponent(name) + "/" + this.EVENT_DIR + "/" + encodeURIComponent(eventName);
+        
+        console.debug(`WebSocketServer on port ${this.getPort()} adding socketServer for '${path}'`);
+        this.socketServers[path] = new WebSocket.Server({ noServer: true });
+        this.socketServers[path].on('connection', (ws, req) => {
+          console.log(`WebSocketServer on port ${this.getPort()} received connection for '${path}' from ${Helpers.toUriLiteral(req.connection.remoteAddress)}:${req.connection.remotePort}`);
+          let subscription = thing.events[eventName].subscribe(
+            (data) => {
+              let content;
+              try {
+                content = ContentSerdes.get().valueToContent(data, thing.events[eventName].data);
+              } catch(err) {
+                console.warn(`HttpServer on port ${this.getPort()} cannot process data for Event '${eventName}: ${err.message}'`);
+                ws.close(-1, err.message)
+                return;
               }
-            })
-            .catch((err) => {
-              console.error(`HttpServer on port ${this.getPort()} got internal error on invoke '${requestUri.pathname}': ${err.message}`);
-              res.writeHead(500);
-              res.end(err.message);
-            });
-        });
 
-      } else if (requestHandler instanceof EventResourceListener) {
-        res.setHeader("Connection", "Keep-Alive");
-        // FIXME get supported content types from EventResourceListener
-        res.setHeader("Content-Type", ContentSerdes.DEFAULT);
-        res.writeHead(200);
-        let subscription = requestHandler.subscribe({
-          next: (content) => res.end(content.body),
-          complete: () => res.end()
-        });
-        res.on("close", () => {
-          console.warn(`HttpServer on port ${this.getPort()} lost Event connection`);
-          subscription.unsubscribe();
-        });
-        res.on("finish", () => {
-          console.warn(`HttpServer on port ${this.getPort()} closed Event connection`);
-          subscription.unsubscribe();
-        });
-        res.setTimeout(60*60*1000, () => subscription.unsubscribe());
-
-      } else if (req.method === "DELETE") {
-        requestHandler.onUnlink()
-          .then(() => {
-            res.writeHead(204);
-            res.end("Deleted");
-          })
-          .catch(err => {
-            console.error(`HttpServer on port ${this.getPort()} got internal error on unlink '${requestUri.pathname}': ${err.message}`);
-            res.writeHead(500);
-            res.end(err.message);
+              switch (content.type) {
+                case "application/json":
+                case "text/plain":
+                  ws.send(content.body.toString());
+                  break;
+                default:
+                  ws.send(content.body);
+                  break;
+              }
+            },
+            (err: Error) => ws.close(-1, err.message),
+            () => ws.close(0, "Completed")
+          );
+          ws.on("close", () => {
+            subscription.unsubscribe();
+            console.log(`WebSocketServer on port ${this.getPort()} closed connection for '${path}' from ${Helpers.toUriLiteral(req.connection.remoteAddress)}:${req.connection.remotePort}`);
           });
+        });
 
-      } else {
-        res.writeHead(405);
-        res.end("Method Not Allowed");
+        for (let address of Helpers.getAddresses()) {
+            let href = this.scheme + "://" + address + ":" + this.getPort() + path;
+            let form = new TD.Form(href, ContentSerdes.DEFAULT);
+            form.op = "subscribeevent";
+            thing.events[eventName].forms.push(form);
+            console.log(`WebSocketServer on port ${this.getPort()} assigns '${href}' to Event '${eventName}'`);
+        }
       }
     }
+    return new Promise<void>((resolve, reject) => {
+      resolve();
+    });
   }
 }

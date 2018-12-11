@@ -22,64 +22,73 @@ import { expect, should, assert } from "chai";
 // should must be called to augment all variables
 should();
 
-import * as http from "http";
 import * as rp from "request-promise";
 
-import { AssetResourceListener } from "@node-wot/core";
-
 import HttpServer from "../src/http-server";
+import { ExposedThing } from "@node-wot/core";
 
 @suite("HTTP server implementation")
 class HttpServerTest {
 
   @test async "should start and stop a server"() {
-    let httpServer = new HttpServer(58080);
+    let httpServer = new HttpServer({ port: 58080 });
 
-    await httpServer.start();
+    await httpServer.start(null);
     expect(httpServer.getPort()).to.eq(58080); // from test
 
     await httpServer.stop();
     expect(httpServer.getPort()).to.eq(-1); // from getPort() when not listening
   }
 
-  @test async "should change resource from 'off' to 'on' and try to invoke and delete"() {
-    let httpServer = new HttpServer(0);
-    httpServer.addResource("/", new AssetResourceListener("off") );
+  @test async "should change resource from 'off' to 'on' and try to invoke"() {
+    let httpServer = new HttpServer({ port: 0 });
 
-    await httpServer.start();
+    await httpServer.start(null);
 
-    let uri = `http://localhost:${httpServer.getPort()}/`;
+    let testThing = new ExposedThing(null);
+    testThing.name = "Test";
+    testThing.addProperty("test", { writable: true, type: "string" }, "off");
+    testThing.properties.test.forms = [];
+    testThing.addAction("try", { output: { type: "string" }}, (input) => { return new Promise<string>( (resolve, reject) => { resolve("TEST"); }); });
+    testThing.actions.try.forms = [];
 
-    rp.get(uri).then(body => {
-      expect(body).to.equal("off");
-      rp.put(uri, {body: "on"}).then(body => {
-        expect(body).to.equal("");
-        rp.get(uri).then(body => {
-          expect(body).to.equal("on");
-          rp.post(uri, {body: "toggle"}).then(async body => {
-            expect(body).to.equal("TODO");
-            await httpServer.stop();
-          });
-        });
-      });
-    });
+    await httpServer.expose(testThing);
+
+    let uri = `http://localhost:${httpServer.getPort()}/Test/`;
+    let body;
+
+    console.log("Testing", uri);
+
+    body = await rp.get(uri+"properties/test");
+    expect(body).to.equal("\"off\"");
+
+    body = await rp.put(uri+"properties/test", { body: "on" });
+    expect(body).to.equal("");
+
+    body = await rp.get(uri+"properties/test");
+    expect(body).to.equal("\"on\"");
+
+    body = await rp.post(uri+"actions/try", { body: "toggle" });
+    expect(body).to.equal("\"TEST\"");
+
+    return httpServer.stop();
   }
 
   @test async "should cause EADDRINUSE error when already running"() {
-    let httpServer1 = new HttpServer(0);
-    httpServer1.addResource("/", new AssetResourceListener("One") );
+    let httpServer1 = new HttpServer({ port: 0 });
 
-    await httpServer1.start();
+    await httpServer1.start(null);
     expect(httpServer1.getPort()).to.be.above(0);
 
-    let httpServer2 = new HttpServer(httpServer1.getPort());
-    httpServer2.addResource("/", new AssetResourceListener("Two") );
+    let httpServer2 = new HttpServer({ port: httpServer1.getPort() });
 
     try {
-      await httpServer2.start(); // should fail
-    } catch(err) { assert(true) };
+      await httpServer2.start(null); // should fail
+    } catch (err) {
+      console.log("HttpServer failed correctly on EADDRINUSE");
+      assert(true);
+    };
 
-    //expect(ret2).to.eq(false);
     expect(httpServer2.getPort()).to.eq(-1);
 
     let uri = `http://localhost:${httpServer1.getPort()}/`;

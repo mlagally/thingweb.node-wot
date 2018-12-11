@@ -19,17 +19,13 @@ import * as WoT from "wot-typescript-definitions";
 
 import WoTImpl from "./wot-impl";
 import ExposedThing from "./exposed-thing";
-import { ProtocolClientFactory, ProtocolServer, ResourceListener, ProtocolClient } from "./resource-listeners/protocol-interfaces"
-import { default as ContentSerdes, ContentCodec } from "./content-serdes";
-import { Thing } from "@node-wot/td-tools";
-import * as TD from "@node-wot/td-tools";
+import { ProtocolClientFactory, ProtocolServer, ProtocolClient } from "./protocol-interfaces"
+import { default as ContentManager, ContentCodec } from "./content-serdes";
 
 export default class Servient {
     private servers: Array<ProtocolServer> = [];
     private clientFactories: Map<string, ProtocolClientFactory> = new Map<string, ProtocolClientFactory>();
     private things: Map<string, ExposedThing> = new Map<string, ExposedThing>();
-    private listeners: Map<string, ResourceListener> = new Map<string, ResourceListener>();
-    private offeredMediaTypes: Array<string> = [ContentSerdes.DEFAUT]
     private credentialStore: Map<string, any> = new Map<string, any>();
 
     /** runs the script in a new sandbox */
@@ -167,26 +163,37 @@ export default class Servient {
         console.error(`Servient caught ${description} ${message}`);
     }
 
-    /** add a new codec to support a mediatype */
-    public addMediaType(codec: ContentCodec, offered: boolean = false): void {
-        ContentSerdes.addCodec(codec);
-        if (offered) this.offeredMediaTypes.push(codec.getMediaType());
+    /** add a new codec to support a mediatype; offered mediatypes are listed in TDs */
+    public addMediaType(codec: ContentCodec, offered: boolean = false) {
+        ContentManager.addCodec(codec, offered);
     }
 
-    /** retun all media types that this servient supports */
-    public getSupportedMediaTypes(): Array<string> {
-        return ContentSerdes.getSupportedMediaTypes();
-    }
+    public expose(thing: ExposedThing): Promise<void> {
 
-    /** return only the media types that should be offered in the TD */
-    public getOffereddMediaTypes(): Array<string> {
-        // return a copy
-        return this.offeredMediaTypes.slice(0);
-    }
+        if (this.servers.length === 0) {
+            console.warn(`Servient has no servers to expose Things`);
+            return new Promise<void>((resolve) => { resolve(); });
+        }
 
-    public expose(thing: ExposedThing) {
         console.log(`Servient exposing '${thing.name}'`);
-        this.servers.forEach( (server) => server.expose(thing));
+
+        // initiatlizing forms fields
+        for (let name in thing.properties) {
+            thing.properties[name].forms = [];
+        }
+        for (let name in thing.actions) {
+            thing.actions[name].forms = [];
+        }
+        for (let name in thing.events) {
+            thing.events[name].forms = [];
+        }
+
+        let serverPromises: Promise<void>[] = [];
+        this.servers.forEach( (server) => { serverPromises.push(server.expose(thing)); });
+
+        return new Promise<void>((resolve, reject) => {
+            Promise.all(serverPromises).then( () => resolve() ).catch( (err) => reject(err) );
+        });
     }
     
     public addThing(thing: ExposedThing): boolean {
@@ -228,15 +235,13 @@ export default class Servient {
     }
 
     public hasClientFor(scheme: string): boolean {
-        // TODO debug-level
-        console.log(`Servient checking for '${scheme}' scheme in ${this.clientFactories.size} ClientFactories`);
+        console.debug(`Servient checking for '${scheme}' scheme in ${this.clientFactories.size} ClientFactories`);
         return this.clientFactories.has(scheme);
     }
 
     public getClientFor(scheme: string): ProtocolClient {
         if (this.clientFactories.has(scheme)) {
-            // TODO debug-level
-            console.log(`Servient creating client for scheme '${scheme}'`);
+            console.debug(`Servient creating client for scheme '${scheme}'`);
             return this.clientFactories.get(scheme).getClient();
         } else {
             // FIXME returning null was bad - Error or Promise?
@@ -252,18 +257,20 @@ export default class Servient {
     public addCredentials(credentials: any) {
         if (typeof credentials === "object") {
             for (let i in credentials) {
+                console.log(`Servient storing credentials for '${i}'`);
                 this.credentialStore.set(i, credentials[i]);
             }
         }
     }
     public getCredentials(identifier: string): any {
+        console.log(`Servient looking up credentials for '${identifier}'`);
         return this.credentialStore.get(identifier);
     }
 
     // will return WoT object
     public start(): Promise<WoT.WoTFactory> {
         let serverStatus: Array<Promise<void>> = [];
-        this.servers.forEach((server) => serverStatus.push(server.start()));
+        this.servers.forEach((server) => serverStatus.push(server.start(this)));
         this.clientFactories.forEach((clientFactory) => clientFactory.init());
 
         return new Promise<WoT.WoTFactory>((resolve, reject) => {

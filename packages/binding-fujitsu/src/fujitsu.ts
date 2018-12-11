@@ -13,29 +13,5 @@
  * SPDX-License-Identifier: EPL-2.0 OR W3C-20150513
  ********************************************************************************/
 
-import { ResourceListener, Content } from "./protocol-interfaces"
-
-export default class BasicResourceListener implements ResourceListener {
-
-    constructor() { }
-
-    public getType(): string {
-        return "Basic";
-    }
-
-    public onRead(): Promise<Content> {
-        return Promise.reject(new Error("Method Not Allowed"));
-    }
-
-    public onWrite(content: Content): Promise<void> {
-        return Promise.reject(new Error("Method Not Allowed"));
-    }
-
-    public onInvoke(content: Content): Promise<Content> {
-        return Promise.reject(new Error("Method Not Allowed"));
-    }
-
-    public onUnlink(): Promise<void> {
-        return Promise.reject(new Error("Method Not Allowed"));
-    }
-}
+export { default as FujitsuServer } from "./fujitsu-server";
+export * from "./fujitsu-server";
